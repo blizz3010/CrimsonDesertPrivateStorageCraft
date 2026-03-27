@@ -1,0 +1,26 @@
+# Build
+build/
+out/
+cmake-build-*/
+*.dll
+*.lib
+*.exp
+*.pdb
+*.obj
+*.o
+*.ilk
+
+# IDE
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
+.idea/
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Config (user overrides)
+config/StorageCraft.json
