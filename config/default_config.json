@@ -1,0 +1,7 @@
+{
+    "enabled": true,
+    "toggleKey": "F9",
+    "maxStorageDistance": 1500.0,
+    "showStorageIcon": true,
+    "logLevel": "Info"
+}
