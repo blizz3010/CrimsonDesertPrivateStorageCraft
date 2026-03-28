@@ -1,16 +1,18 @@
 // ============================================================================
 // StorageCraft - Crimson Desert Private Storage Crafting Mod
 //
-// ASI plugin loaded by an ASI loader (e.g., Ultimate ASI Loader).
-// Follows the same initialization pattern as other CD mods
-// (CrimsonDesert-player-status-modifier).
+// ASI plugin for the BlackSpace Engine.
+// Uses verified patterns from Orcax-1399/CrimsonDesert-player-status-modifier.
 //
-// Flow:
-//   1. ASI loader loads StorageCraft.asi into the game process
-//   2. DllMain spawns a background thread (avoids loader lock)
-//   3. Thread waits for game to initialize (configurable delay)
-//   4. Installs hooks via SafetyHook (mid-function hooks)
-//   5. Polls for toggle keybind (F9) and unload hotkey (Ctrl+Shift+U)
+// Init flow (matching CD mod conventions):
+//   1. DLL_PROCESS_ATTACH -> spawn thread (avoid loader lock)
+//   2. Load INI config
+//   3. Initialize logger
+//   4. Sleep InitDelayMs (default 3000ms) for game to fully load
+//   5. Reset runtime state
+//   6. Install hooks (player-pointer, item-gain, item-loss, UI)
+//   7. Poll for keybinds (toggle F9, unload Ctrl+Shift+U)
+//   8. On unload: remove hooks, shutdown logger, free library
 // ============================================================================
 
 #include "core/logger.h"
@@ -19,6 +21,7 @@
 #include "craft/craft_hook.h"
 #include "ui/ui_hook.h"
 #include "ui/storage_indicator.h"
+#include "game/game_types.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -29,29 +32,35 @@ namespace StorageCraft {
 static std::atomic<bool> s_running = false;
 static HMODULE s_hModule = nullptr;
 
+static void ResetRuntimeState() {
+    g_playerState.Reset();
+    Logger::Debug("Runtime state reset");
+}
+
 #ifdef _WIN32
 static DWORD WINAPI ModThread(LPVOID) {
+    // Load config first (needed for delay and log settings)
+    ModConfig::Load();
+
     // Initialize logging
     Logger::Init();
-    Logger::Info("========================================");
-    Logger::Info("StorageCraft v1.0.0");
-    Logger::Info("Private Storage Crafting Mod");
-    Logger::Info("Crimson Desert (BlackSpace Engine)");
-    Logger::Info("========================================");
-
-    // Load configuration from INI
-    ModConfig::Load();
     Logger::SetLevel(ModConfig::Get().logLevel);
+    Logger::Info("========================================");
+    Logger::Info("StorageCraft v1.1.0");
+    Logger::Info("Crimson Desert Private Storage Crafting");
+    Logger::Info("Engine: BlackSpace (Pearl Abyss)");
+    Logger::Info("Hooks: SafetyHook (mid-function)");
+    Logger::Info("========================================");
 
-    // Wait for game to fully initialize before hooking.
-    // This delay is critical - hooking too early will crash because
-    // the game's code sections aren't fully loaded yet.
-    // The player-status-modifier uses 3000ms as default.
+    // Wait for game to fully initialize
     int delay = ModConfig::Get().initDelayMs;
     Logger::Info("Waiting {}ms for game initialization...", delay);
     Sleep(delay);
 
-    // Initialize SafetyHook
+    // Reset any stale state
+    ResetRuntimeState();
+
+    // Initialize hook engine
     if (!HookManager::Init()) {
         Logger::Error("Failed to initialize HookManager, aborting");
         Logger::Shutdown();
@@ -59,24 +68,23 @@ static DWORD WINAPI ModThread(LPVOID) {
         return 1;
     }
 
-    // Install hooks
+    // Install hooks - order matters!
+    // Player-pointer MUST be first (other hooks depend on g_playerState)
     CraftHook::Install();
     UIHook::Install();
 
-    Logger::Info("All hooks installed. StorageCraft is {}.",
+    Logger::Info("Hooks installed. StorageCraft is {}.",
                  ModConfig::IsEnabled() ? "ENABLED" : "DISABLED");
-    Logger::Info("Press F9 to toggle. Press Ctrl+Shift+U to unload.");
+    Logger::Info("Press F9 to toggle. Ctrl+Shift+U to unload.");
 
     s_running = true;
 
-    // Input polling loop (~20 Hz, matching CD mod conventions)
+    // Input polling loop (~20 Hz)
     while (s_running) {
-        // Toggle key
         if (GetAsyncKeyState(ModConfig::GetToggleKeyCode()) & 1) {
             ModConfig::Toggle();
         }
 
-        // Unload hotkey: Ctrl+Shift+U
         if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
             (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
             (GetAsyncKeyState('U') & 1)) {
@@ -87,8 +95,8 @@ static DWORD WINAPI ModThread(LPVOID) {
         Sleep(50);
     }
 
-    // Clean shutdown
-    Logger::Info("Shutting down StorageCraft...");
+    // Clean shutdown (reverse order of init)
+    Logger::Info("Shutting down...");
     UIHook::Uninstall();
     CraftHook::Uninstall();
     StorageIndicator::Shutdown();

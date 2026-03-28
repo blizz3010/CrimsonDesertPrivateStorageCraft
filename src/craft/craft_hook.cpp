@@ -8,156 +8,253 @@
 #include "config/mod_config.h"
 
 #include <safetyhook.hpp>
+#include <mutex>
 
 namespace StorageCraft {
 
 // ============================================================================
-// AOB Patterns for crafting functions
+// AOB Patterns - sourced from Orcax-1399/CrimsonDesert-player-status-modifier
 //
-// These patterns target CrimsonDesert.exe's crafting system in the
-// BlackSpace Engine. They must be discovered via reverse engineering:
-//
-//   1. Set a breakpoint on item count changes during crafting
-//   2. Trace back to the crafting confirmation handler
-//   3. Identify the instruction that subtracts materials
-//   4. Generate an AOB pattern from surrounding bytes
-//
-// The patterns below are PLACEHOLDERS. Replace with real AOBs after RE.
-//
-// Methodology reference: The player-status-modifier found its item-gain
-// AOB ("49 01 4C 38 10") by watching for ADD instructions on item counts.
-// For crafting, we need the corresponding SUB/DEC instruction.
+// The player-status-modifier is the only open-source CD mod with verified,
+// working AOB patterns. We reuse its player-pointer and item-gain patterns
+// directly, and derive our crafting hooks from the item-loss pattern.
 // ============================================================================
 namespace Patterns {
-    // Crafting material consumption: the instruction that decrements
-    // an item count during crafting. Expected form: sub [reg+offset], reg
-    // Hook offset: +0 (hook at the sub instruction itself)
+    // -----------------------------------------------------------------------
+    // VERIFIED: Player-pointer capture (from player-status-modifier)
+    // Fires when the game accesses the player's status component.
+    // We use this to capture the player component pointer and marker.
     //
-    // PLACEHOLDER - needs real AOB from game binary
-    constexpr const char* CraftConsume =
-        "49 29 4C 38 10";  // sub [r8+rdi+10h], rcx (mirrors item-gain pattern)
+    // Original: 0F B6 ? ? 8B ? ? 48 8B 58 40 48 8B 43 08 ? 8D ? 08 33 ? ? 85 ? ? 0F 44
+    // Hook at +7: "48 8B 58 40" = mov rbx, [rax+0x40]
+    // At this point: rax = owner pointer
+    //   -> *(owner + 0x20) = component pointer
+    //   -> *(component + 0x00) = status marker (vtable/type ID)
+    // -----------------------------------------------------------------------
+    constexpr const char* PlayerPointer =
+        "0F B6 ?? ?? 8B ?? ?? 48 8B 58 40 48 8B 43 08 ?? 8D ?? 08 33 ?? ?? 85 ?? ?? 0F 44";
+    constexpr int PlayerPointer_HookOffset = 7;
 
-    // Crafting availability check: the instruction that reads material
-    // counts to determine if crafting is possible. We hook this to
-    // inject our combined inventory+storage count.
+    // -----------------------------------------------------------------------
+    // VERIFIED: Item-gain (from player-status-modifier)
+    // Instruction: add [r8+rdi+0x10], rcx
+    // Decoded: 49 01 4C 38 10
     //
-    // PLACEHOLDER - needs real AOB from game binary
-    constexpr const char* CraftCheck =
-        "49 8B 4C 38 10";  // mov rcx, [r8+rdi+10h] (read item count)
+    // At this point:
+    //   r8  = item table base pointer
+    //   rdi = slot/entry offset
+    //   rcx = amount being added
+    //   [r8+rdi+0x10] = the Count field of the item entry
+    // -----------------------------------------------------------------------
+    constexpr const char* ItemGain =
+        "49 01 4C 38 10";
+    constexpr int ItemGain_HookOffset = 0;
+
+    // -----------------------------------------------------------------------
+    // VERIFIED: Item-loss (from player-status-modifier, documented but unhooked)
+    // Instruction: sub [r15+rax+0x10], rcx
+    // Decoded: 49 29 4C 07 10
+    //
+    // At this point:
+    //   r15 = item table base pointer
+    //   rax = slot/entry offset
+    //   rcx = amount being subtracted
+    //   [r15+rax+0x10] = the Count field of the item entry
+    //
+    // NOTE: Different registers than item-gain! (r15+rax vs r8+rdi)
+    // -----------------------------------------------------------------------
+    constexpr const char* ItemLoss =
+        "49 29 4C 07 10";
+    constexpr int ItemLoss_HookOffset = 0;
 }
 
-namespace HookOffsets {
-    constexpr int CraftConsume = 0;
-    constexpr int CraftCheck = 0;
-}
+// ============================================================================
+// Hook indices and state
+// ============================================================================
+static int s_playerPtrHookIdx = -1;
+static int s_itemGainHookIdx = -1;
+static int s_itemLossHookIdx = -1;
+
+static std::mutex s_stateMutex;
+static std::atomic<int> s_ptrSamples = 0;
+static std::atomic<int> s_gainSamples = 0;
+static std::atomic<int> s_lossSamples = 0;
+constexpr int MAX_LOG_SAMPLES = 24; // Match player-status-modifier convention
 
 // ============================================================================
-// Hook state
-// ============================================================================
-static int s_consumeHookIndex = -1;
-static int s_checkHookIndex = -1;
-static std::atomic<int> s_sampleCount = 0;
-constexpr int MAX_LOG_SAMPLES = 16;
-
-// ============================================================================
-// Mid-function hook: Material consumption
+// Hook: Player-pointer capture
 //
-// At the consumption instruction, registers contain:
-//   rcx = amount being subtracted
-//   r8  = item table base pointer
-//   rdi = slot index (item ID lookup)
-//
-// We intercept to:
-//   1. Check if mod is enabled
-//   2. If the item is available in inventory, let original consume happen
-//   3. If inventory is short, reduce the consumption amount and consume
-//      the remainder from storage via our MaterialConsumer
+// This is the foundation hook - it captures the player's component pointer
+// and status marker so other hooks can identify player-owned data.
+// Directly adapted from player-status-modifier's PlayerPointerCallback.
 // ============================================================================
-static void OnCraftConsume(SafetyHookContext& ctx) {
-    if (!ModConfig::IsEnabled()) return;
-
+static void OnPlayerPointer(SafetyHookContext& ctx) {
     __try {
-        auto amount = static_cast<int32_t>(ctx.rcx);
-        auto* itemTableBase = reinterpret_cast<void*>(ctx.r8);
-        auto slotIndex = static_cast<int32_t>(ctx.rdi);
+        auto owner = reinterpret_cast<void*>(ctx.rax);
+        if (!Memory::IsValidPtr(owner)) return;
 
-        if (!Memory::IsValidPtr(itemTableBase) || amount <= 0) return;
+        // Walk: owner + 0x20 -> component
+        auto* componentPtr = Memory::ReadOffset<void*>(owner, 0x20);
+        if (!Memory::IsValidPtr(componentPtr)) return;
 
-        // Read the item ID from the slot
-        // Item table layout: each entry is 16 bytes (BSItemEntry)
-        // ItemId is at offset 0x00 within each entry
-        auto* entry = reinterpret_cast<BSItemEntry*>(
-            reinterpret_cast<uintptr_t>(itemTableBase) + slotIndex * sizeof(BSItemEntry) + 0x10
-        );
+        // Read marker at component + 0x00 (vtable / type ID)
+        auto marker = *reinterpret_cast<uintptr_t*>(componentPtr);
+        if (marker == 0) return;
 
-        if (!Memory::IsValidPtr(entry)) return;
-        int32_t itemId = entry->ItemId;
-        int32_t currentCount = entry->Count;
+        // Only capture once (or if component changed, e.g., respawn)
+        auto currentMarker = g_playerState.statusMarker.load();
+        if (currentMarker == 0 || currentMarker != marker) {
+            std::lock_guard lock(s_stateMutex);
+            g_playerState.statusMarker.store(marker);
+            g_playerState.componentPtr.store(reinterpret_cast<uintptr_t>(componentPtr));
+            g_playerState.ownerPtr.store(reinterpret_cast<uintptr_t>(owner));
 
-        // If inventory has enough, let the original instruction handle it
-        if (currentCount >= amount) {
-            if (s_sampleCount < MAX_LOG_SAMPLES) {
-                Logger::Debug("CraftConsume: item {} has {} in inventory (need {}), passing through",
-                              itemId, currentCount, amount);
-                s_sampleCount++;
-            }
-            return;
+            Logger::Info("PlayerPointer: captured component={:X} marker={:X}",
+                         reinterpret_cast<uintptr_t>(componentPtr), marker);
         }
 
-        // Inventory is short - we need to pull from storage
-        int32_t fromInventory = currentCount;  // Take all from inventory
-        int32_t fromStorage = amount - fromInventory;
-
-        // Modify rcx to only consume what's in inventory
-        // The storage portion will be consumed separately
-        ctx.rcx = static_cast<uint64_t>(fromInventory);
-
-        // TODO: Consume fromStorage amount from linked storage containers
-        // This requires resolving the player's linked storage list,
-        // which needs the storage-pointer AOB to be discovered.
-        //
-        // For now, log what would happen:
-        Logger::Info("CraftConsume: item {} - {} from inventory, {} from storage",
-                     itemId, fromInventory, fromStorage);
+        if (s_ptrSamples < MAX_LOG_SAMPLES) {
+            Logger::Debug("PlayerPointer: rax={:X} rsi={:X} rdx={:X}",
+                          ctx.rax, ctx.rsi, ctx.rdx);
+            s_ptrSamples++;
+        }
 
     } __except(EXCEPTION_EXECUTE_HANDLER) {
-        // Swallow exceptions in hot-path hooks (matching CD mod conventions)
         static bool reported = false;
         if (!reported) {
-            Logger::Error("CraftConsume: exception in hook callback");
+            Logger::Error("PlayerPointer: exception in hook");
             reported = true;
         }
     }
 }
 
 // ============================================================================
-// Mid-function hook: Material availability check
+// Hook: Item-gain intercept
 //
-// This fires when the crafting UI checks if the player has enough materials.
-// We intercept to add storage counts to the returned value.
+// Fires on: add [r8+rdi+0x10], rcx
+// We use this primarily for monitoring and to capture the item table
+// base pointer (r8) for later use by the crafting system.
 // ============================================================================
-static void OnCraftCheck(SafetyHookContext& ctx) {
-    if (!ModConfig::IsEnabled()) return;
+static std::atomic<uintptr_t> s_lastItemTableBase{0};
 
+static void OnItemGain(SafetyHookContext& ctx) {
     __try {
-        // rcx will contain the item count read from inventory
-        // We add the storage count to make the check pass
-        auto inventoryCount = static_cast<int32_t>(ctx.rcx);
         auto* itemTableBase = reinterpret_cast<void*>(ctx.r8);
-        auto slotIndex = static_cast<int32_t>(ctx.rdi);
+        auto slotOffset = ctx.rdi;
+        auto amount = static_cast<int64_t>(ctx.rcx);
 
         if (!Memory::IsValidPtr(itemTableBase)) return;
 
-        // TODO: Look up storage count for this item and add it
-        // ctx.rcx = inventoryCount + storageCount;
-        //
-        // This requires the storage accessor to be wired up with
-        // real pointers from the game.
+        // Cache the item table base for use by other hooks
+        s_lastItemTableBase.store(ctx.r8);
+
+        if (s_gainSamples < MAX_LOG_SAMPLES) {
+            // Read the current count at [r8+rdi+0x10] before the add
+            auto* countPtr = reinterpret_cast<int64_t*>(ctx.r8 + ctx.rdi + 0x10);
+            int64_t currentCount = Memory::IsValidPtr(countPtr) ? *countPtr : -1;
+
+            // Read item ID at [r8+rdi+0x00] (first field of entry)
+            auto* idPtr = reinterpret_cast<int32_t*>(ctx.r8 + ctx.rdi);
+            int32_t itemId = Memory::IsValidPtr(idPtr) ? *idPtr : -1;
+
+            Logger::Debug("ItemGain: r8={:X} rdi={:X} rcx={} itemId={} count={} -> {}",
+                          ctx.r8, ctx.rdi, amount, itemId, currentCount, currentCount + amount);
+            s_gainSamples++;
+        }
+
+        // If mod is enabled, we could apply a gain multiplier here
+        // (like the player-status-modifier does). For now, passthrough.
 
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         static bool reported = false;
         if (!reported) {
-            Logger::Error("CraftCheck: exception in hook callback");
+            Logger::Error("ItemGain: exception in hook");
+            reported = true;
+        }
+    }
+}
+
+// ============================================================================
+// Hook: Item-loss intercept (CORE CRAFTING HOOK)
+//
+// Fires on: sub [r15+rax+0x10], rcx
+// This is where materials are consumed during crafting.
+//
+// When StorageCraft is enabled:
+//   1. Read the item entry at [r15+rax] to get item ID and current count
+//   2. If inventory has enough, let original sub proceed
+//   3. If inventory is short, reduce rcx to only consume what's available
+//      in inventory, and consume the remainder from storage
+// ============================================================================
+static void OnItemLoss(SafetyHookContext& ctx) {
+    if (!ModConfig::IsEnabled()) return;
+
+    __try {
+        auto* itemTableBase = reinterpret_cast<void*>(ctx.r15);
+        auto slotOffset = ctx.rax;
+        auto amount = static_cast<int64_t>(ctx.rcx);
+
+        if (!Memory::IsValidPtr(itemTableBase) || amount <= 0) return;
+
+        // Read current count at [r15+rax+0x10]
+        auto* countPtr = reinterpret_cast<int64_t*>(ctx.r15 + ctx.rax + 0x10);
+        if (!Memory::IsValidPtr(countPtr)) return;
+        int64_t currentCount = *countPtr;
+
+        // Read item ID at [r15+rax+0x00]
+        auto* idPtr = reinterpret_cast<int32_t*>(ctx.r15 + ctx.rax);
+        if (!Memory::IsValidPtr(idPtr)) return;
+        int32_t itemId = *idPtr;
+
+        if (s_lossSamples < MAX_LOG_SAMPLES) {
+            Logger::Debug("ItemLoss: r15={:X} rax={:X} rcx={} itemId={} count={}",
+                          ctx.r15, ctx.rax, amount, itemId, currentCount);
+            s_lossSamples++;
+        }
+
+        // If inventory has enough, let the game handle it normally
+        if (currentCount >= amount) {
+            return;
+        }
+
+        // ============================================================
+        // STORAGE CRAFTING LOGIC
+        //
+        // Inventory doesn't have enough. Consume what we can from
+        // inventory, and pull the rest from storage.
+        // ============================================================
+        int64_t fromInventory = currentCount;  // Take everything in inventory
+        int64_t fromStorage = amount - fromInventory;
+
+        // Modify rcx to only subtract what's in inventory.
+        // The original instruction will execute: sub [r15+rax+0x10], rcx
+        // By reducing rcx, we only consume the inventory portion.
+        ctx.rcx = static_cast<uint64_t>(fromInventory);
+
+        // TODO: Consume fromStorage from linked storage containers.
+        // This requires:
+        //   1. Resolving the player's linked storage list
+        //      (needs a storage-list AOB to be discovered)
+        //   2. Walking the storage component chain
+        //   3. Subtracting fromStorage from storage item entries
+        //
+        // The storage component pointer chain is NOT yet in any public
+        // CD mod. The player-status-modifier only handles player stats
+        // and items, not storage containers. Discovering the storage
+        // access pattern requires:
+        //   - Open a storage container in-game
+        //   - Set a data breakpoint on the container's item count
+        //   - Trace back to find the storage component pointer
+        //   - Generate AOB from surrounding instructions
+
+        Logger::Info("ItemLoss: item {} - consuming {} from inventory (had {}), "
+                     "need {} more from storage",
+                     itemId, fromInventory, currentCount, fromStorage);
+
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        static bool reported = false;
+        if (!reported) {
+            Logger::Error("ItemLoss: exception in hook");
             reported = true;
         }
     }
@@ -167,34 +264,45 @@ static void OnCraftCheck(SafetyHookContext& ctx) {
 // Install / Uninstall
 // ============================================================================
 void CraftHook::Install() {
-    // Scan for crafting consumption instruction
-    auto consumeAddr = Memory::PatternScanOffset(
-        nullptr, Patterns::CraftConsume, HookOffsets::CraftConsume);
-    if (consumeAddr) {
-        s_consumeHookIndex = HookManager::AddMidHook(consumeAddr, OnCraftConsume, "CraftConsume");
+    // 1. Player-pointer hook (required for identifying player data)
+    auto ptrAddr = Memory::PatternScanOffset(
+        nullptr, Patterns::PlayerPointer, Patterns::PlayerPointer_HookOffset);
+    if (ptrAddr) {
+        s_playerPtrHookIdx = HookManager::AddMidHook(ptrAddr, OnPlayerPointer, "PlayerPointer");
     } else {
-        Logger::Error("CraftHook: failed to find CraftConsume pattern");
+        Logger::Error("CraftHook: PlayerPointer AOB not found");
     }
 
-    // Scan for crafting check instruction
-    auto checkAddr = Memory::PatternScanOffset(
-        nullptr, Patterns::CraftCheck, HookOffsets::CraftCheck);
-    if (checkAddr) {
-        s_checkHookIndex = HookManager::AddMidHook(checkAddr, OnCraftCheck, "CraftCheck");
+    // 2. Item-gain hook (monitoring + item table base capture)
+    auto gainAddr = Memory::PatternScanOffset(
+        nullptr, Patterns::ItemGain, Patterns::ItemGain_HookOffset);
+    if (gainAddr) {
+        s_itemGainHookIdx = HookManager::AddMidHook(gainAddr, OnItemGain, "ItemGain");
     } else {
-        Logger::Error("CraftHook: failed to find CraftCheck pattern");
+        Logger::Error("CraftHook: ItemGain AOB not found");
     }
+
+    // 3. Item-loss hook (core crafting interception)
+    auto lossAddr = Memory::PatternScanOffset(
+        nullptr, Patterns::ItemLoss, Patterns::ItemLoss_HookOffset);
+    if (lossAddr) {
+        s_itemLossHookIdx = HookManager::AddMidHook(lossAddr, OnItemLoss, "ItemLoss");
+    } else {
+        Logger::Error("CraftHook: ItemLoss AOB not found");
+    }
+
+    Logger::Info("CraftHook: installed ({}/3 hooks active)",
+                 (s_playerPtrHookIdx >= 0 ? 1 : 0) +
+                 (s_itemGainHookIdx >= 0 ? 1 : 0) +
+                 (s_itemLossHookIdx >= 0 ? 1 : 0));
 }
 
 void CraftHook::Uninstall() {
-    if (s_consumeHookIndex >= 0) {
-        HookManager::RemoveMidHook(s_consumeHookIndex);
-        s_consumeHookIndex = -1;
-    }
-    if (s_checkHookIndex >= 0) {
-        HookManager::RemoveMidHook(s_checkHookIndex);
-        s_checkHookIndex = -1;
-    }
+    if (s_playerPtrHookIdx >= 0) { HookManager::RemoveMidHook(s_playerPtrHookIdx); s_playerPtrHookIdx = -1; }
+    if (s_itemGainHookIdx >= 0) { HookManager::RemoveMidHook(s_itemGainHookIdx); s_itemGainHookIdx = -1; }
+    if (s_itemLossHookIdx >= 0) { HookManager::RemoveMidHook(s_itemLossHookIdx); s_itemLossHookIdx = -1; }
+
+    g_playerState.Reset();
     Logger::Info("CraftHook: uninstalled");
 }
 

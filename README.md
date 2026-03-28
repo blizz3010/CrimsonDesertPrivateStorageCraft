@@ -101,7 +101,15 @@ Uses **SafetyHook** (mid-function hooks) - the standard for CD modding. Mid-func
 
 Game functions are located at runtime via Array-of-Bytes (AOB) pattern scanning. Patterns are byte sequences with `??` wildcards that match specific instructions in the game binary. The scanner checks `.text` section first, then falls back to all executable sections.
 
-**Current pattern status:** The AOB patterns in the source are placeholders. They need to be discovered from the actual game binary using a disassembler (IDA Pro, Ghidra) or debugger (x64dbg, Cheat Engine). See the TODO comments in each hook file for the methodology.
+**Verified patterns** (from [CrimsonDesert-player-status-modifier](https://github.com/Orcax-1399/CrimsonDesert-player-status-modifier)):
+
+| Pattern | AOB | Instruction | Registers |
+|---------|-----|-------------|-----------|
+| Player-pointer | `0F B6 ?? ?? 8B ?? ?? 48 8B 58 40...` | `mov rbx, [rax+0x40]` | rax=owner, *(owner+0x20)=component |
+| Item-gain | `49 01 4C 38 10` | `add [r8+rdi+0x10], rcx` | r8=item table, rdi=slot offset, rcx=amount |
+| Item-loss | `49 29 4C 07 10` | `sub [r15+rax+0x10], rcx` | r15=item table, rax=slot offset, rcx=amount |
+
+**Still needed:** Storage container access pattern and UI count update pattern (see Contributing section).
 
 ### Project Structure
 
@@ -149,20 +157,29 @@ test/
 - **Mod toggled mid-craft**: Toggle only takes effect at next operation boundary
 - **Exception safety**: All hook callbacks wrapped in SEH `__try/__except` (CD mod convention)
 
-## Contributing
+## What's Verified vs What's Needed
 
-### Finding Real AOB Patterns
+### Verified (from player-status-modifier)
+- Player-pointer AOB and component walking chain (owner +0x20 -> component)
+- Player identity marker at component +0x00
+- Item-gain pattern: `49 01 4C 38 10` — `add [r8+rdi+0x10], rcx`
+- Item-loss pattern: `49 29 4C 07 10` — `sub [r15+rax+0x10], rcx`
+- Item count field at entry +0x10
+- Data table base at component +0x58
 
-The main work needed to make this fully functional:
+### Still Needed (requires debugger + game running)
+1. **Storage container component pointer** — Open a storage container, set a data breakpoint on its item count, trace back to find the component pointer and walk chain
+2. **Storage item array offset** — Which offset within the storage component points to its item array (currently estimated at +0x168)
+3. **UI count display pattern** — The instruction that writes material counts to the crafting panel (for showing combined totals)
+4. **Player position resolution** — Walk from player component to world position for range checks
 
-1. **Install x64dbg** or use Cheat Engine with the game running
-2. **Find the crafting consumption instruction**: Set a breakpoint on item count decrements during crafting. The instruction that subtracts materials is the target for `CraftConsume`
-3. **Find the crafting check instruction**: The instruction that reads material counts to determine if crafting is possible
-4. **Find the UI count update**: The instruction that writes available counts to the crafting panel
-5. **Generate AOB patterns**: Record the surrounding bytes, replace variable bytes with `??`
-6. **Update the `Patterns` namespace** in `craft_hook.cpp` and `ui_hook.cpp`
+### How to Find Missing Patterns
 
-Reference: [CrimsonDesert-player-status-modifier](https://github.com/Orcax-1399/CrimsonDesert-player-status-modifier) demonstrates this methodology for stats/damage/items.
+1. **Install x64dbg** and attach to CrimsonDesert.exe
+2. **For storage**: Open a storage container, use Cheat Engine to find an item count address, set a hardware breakpoint on write, craft/move items to trigger it, record surrounding bytes
+3. **For UI**: Open crafting panel, set breakpoint on the text that shows "5/10" material count, find the instruction writing the "5"
+4. **Generate AOB**: Record 10-20 bytes around the instruction, replace register-dependent bytes with `??`
+5. **Update patterns** in `craft_hook.cpp` and `ui_hook.cpp`
 
 ## License
 
