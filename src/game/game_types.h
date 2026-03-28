@@ -45,12 +45,25 @@ struct FVector3 {
 //
 // Items use a dual-ID system: ItemNo (int32) + ItemKey (int32)
 //   Example: Abyss Artifact = ItemNo:65, ItemKey:75002
+//            Arrow = ItemNo:66, ItemKey:50001
+//            Silver = ItemNo:21/22, ItemKey:1 (stack = copper cents, 100 = 1.00 silver)
 //   Internal string codes: "item_currency_pywel_01" etc.
+//
+// Additional fields per item (from save editor ItemSaveData):
+//   - Enchant level (0-10 for equipment)
+//   - Endurance
+//   - Sharpness
+//   - ItemBuffs (binary format with flat2/flat1/rate stat types, 28 stat hashes)
 //
 // Inventory config stored in 0008/0.paz, InventoryInfo table:
 //   _defaultSlotCount: uint16 (vanilla: 50)
 //   _maxSlotCount: uint16 (vanilla: 240, hard limit: 65535)
-// Private Storage expandable to 999 slots via PAZ patching (Nexus mod #244)
+//
+// Private Storage (added Patch 1.00.03, March 22 2026):
+//   - 240-slot shared/account-wide chest
+//   - Located at Greymane Camp (behind Carl the Provisioner) or temporary lodgings
+//   - Consumables stack up to 50 per slot; equipment uses 1 slot each
+//   - Expandable to 999 slots via PAZ patching (Nexus mod #244)
 struct BSItemEntry {
     int32_t ItemNo = 0;        // +0x00: Item type number (e.g., 65 = Abyss Artifact)
     int32_t ItemKey = 0;       // +0x04: Item key (e.g., 75002)

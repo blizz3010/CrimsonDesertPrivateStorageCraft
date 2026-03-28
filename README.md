@@ -113,10 +113,14 @@ Game functions are located at runtime via Array-of-Bytes (AOB) pattern scanning.
 - Item count is an **8-byte integer** (int64) at entry offset **+0x10** (CE community + ASI mod)
 - NOPing the item-loss AOB prevents item decrease during selling, refining, and crafting ([CE script](https://fearlessrevolution.com/viewtopic.php?t=38642&start=15))
 - Items use a dual-ID system: **ItemNo** + **ItemKey** (save editor community)
+- Additional item fields: enchant level, endurance, sharpness, ItemBuffs (28 stat hashes)
 - Inventory config in `0008/0.paz`: `_defaultSlotCount` / `_maxSlotCount` as uint16 ([Nexus mod #56](https://www.nexusmods.com/crimsondesert/mods/56))
+- Private Storage: 240-slot shared/account-wide chest (added Patch 1.00.03). Consumables stack 50/slot.
 - Private Storage expandable to 999 slots via PAZ patching ([Nexus mod #244](https://www.nexusmods.com/crimsondesert/mods/244))
+- Save file format: ChaCha20 encrypted, LZ4-HC compressed, PARC (Pearl Abyss Reflect Container) serialization
+- Item records use `ItemSaveData` type, pattern-matched by field signature at runtime
 
-**Still needed:** Storage container runtime access pattern and UI count update pattern (see Contributing section).
+**Still needed:** Storage container runtime access AOB pattern and UI count update AOB pattern. See the "Still Needed" section below for details on how to discover these.
 
 ### Project Structure
 
