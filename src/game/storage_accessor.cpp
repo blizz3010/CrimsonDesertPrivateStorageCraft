@@ -41,7 +41,7 @@ int32_t StorageAccessor::GetItemCount(int32_t itemId) const {
     auto* items = GetItemArray();
     int64_t total = 0;
     for (int32_t i = 0; i < items->Count; i++) {
-        if (items->Data[i].ItemId == itemId) {
+        if (items->Data[i].ItemNo == itemId) {
             total += items->Data[i].Count;
         }
     }
@@ -59,13 +59,13 @@ bool StorageAccessor::ConsumeItem(int32_t itemId, int32_t amount) {
 
     int64_t available = 0;
     for (int32_t i = 0; i < items->Count; i++) {
-        if (items->Data[i].ItemId == itemId) available += items->Data[i].Count;
+        if (items->Data[i].ItemNo == itemId) available += items->Data[i].Count;
     }
     if (available < amount) return false;
 
     int32_t remaining = amount;
     for (int32_t i = 0; i < items->Count && remaining > 0; i++) {
-        if (items->Data[i].ItemId != itemId) continue;
+        if (items->Data[i].ItemNo != itemId) continue;
 
         auto take = std::min(items->Data[i].Count, static_cast<int64_t>(remaining));
         items->Data[i].Count -= take;

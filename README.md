@@ -101,15 +101,22 @@ Uses **SafetyHook** (mid-function hooks) - the standard for CD modding. Mid-func
 
 Game functions are located at runtime via Array-of-Bytes (AOB) pattern scanning. Patterns are byte sequences with `??` wildcards that match specific instructions in the game binary. The scanner checks `.text` section first, then falls back to all executable sections.
 
-**Verified patterns** (from [CrimsonDesert-player-status-modifier](https://github.com/Orcax-1399/CrimsonDesert-player-status-modifier)):
+**Verified patterns** (confirmed by 3 independent sources):
 
-| Pattern | AOB | Instruction | Registers |
-|---------|-----|-------------|-----------|
-| Player-pointer | `0F B6 ?? ?? 8B ?? ?? 48 8B 58 40...` | `mov rbx, [rax+0x40]` | rax=owner, *(owner+0x20)=component |
-| Item-gain | `49 01 4C 38 10` | `add [r8+rdi+0x10], rcx` | r8=item table, rdi=slot offset, rcx=amount |
-| Item-loss | `49 29 4C 07 10` | `sub [r15+rax+0x10], rcx` | r15=item table, rax=slot offset, rcx=amount |
+| Pattern | AOB | Instruction | Registers | Confirmed by |
+|---------|-----|-------------|-----------|-------------|
+| Player-pointer | `0F B6 ?? ?? 8B ?? ?? 48 8B 58 40...` | `mov rbx, [rax+0x40]` | rax=owner, *(owner+0x20)=component | [player-status-modifier](https://github.com/Orcax-1399/CrimsonDesert-player-status-modifier) |
+| Item-gain | `49 01 4C 38 10` | `add [r8+rdi+0x10], rcx` | r8=item table, rdi=slot offset, rcx=amount | player-status-modifier |
+| Item-loss | `49 29 4C 07 10` | `sub [r15+rax+0x10], rcx` | r15=item table, rax=slot offset, rcx=amount | player-status-modifier + [FearLess CE](https://fearlessrevolution.com/viewtopic.php?t=38642&start=15) |
 
-**Still needed:** Storage container access pattern and UI count update pattern (see Contributing section).
+**Confirmed item memory layout:**
+- Item count is an **8-byte integer** (int64) at entry offset **+0x10** (CE community + ASI mod)
+- NOPing the item-loss AOB prevents item decrease during selling, refining, and crafting ([CE script](https://fearlessrevolution.com/viewtopic.php?t=38642&start=15))
+- Items use a dual-ID system: **ItemNo** + **ItemKey** (save editor community)
+- Inventory config in `0008/0.paz`: `_defaultSlotCount` / `_maxSlotCount` as uint16 ([Nexus mod #56](https://www.nexusmods.com/crimsondesert/mods/56))
+- Private Storage expandable to 999 slots via PAZ patching ([Nexus mod #244](https://www.nexusmods.com/crimsondesert/mods/244))
+
+**Still needed:** Storage container runtime access pattern and UI count update pattern (see Contributing section).
 
 ### Project Structure
 

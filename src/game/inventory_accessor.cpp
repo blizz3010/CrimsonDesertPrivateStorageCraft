@@ -53,7 +53,7 @@ int32_t InventoryAccessor::GetItemCount(int32_t itemId) const {
     auto* items = GetItemArray();
     int32_t total = 0;
     for (int32_t i = 0; i < items->Count; i++) {
-        if (items->Data[i].ItemId == itemId) {
+        if (items->Data[i].ItemNo == itemId) {
             total += static_cast<int32_t>(items->Data[i].Count);
         }
     }
@@ -68,7 +68,7 @@ bool InventoryAccessor::ConsumeItem(int32_t itemId, int32_t amount) {
     // Verify sufficient quantity
     int32_t available = 0;
     for (int32_t i = 0; i < items->Count; i++) {
-        if (items->Data[i].ItemId == itemId) {
+        if (items->Data[i].ItemNo == itemId) {
             available += static_cast<int32_t>(items->Data[i].Count);
         }
     }
@@ -77,7 +77,7 @@ bool InventoryAccessor::ConsumeItem(int32_t itemId, int32_t amount) {
     // Consume across stacks
     int32_t remaining = amount;
     for (int32_t i = 0; i < items->Count && remaining > 0; i++) {
-        if (items->Data[i].ItemId != itemId) continue;
+        if (items->Data[i].ItemNo != itemId) continue;
 
         auto entryCount = static_cast<int32_t>(items->Data[i].Count);
         int32_t take = std::min(entryCount, remaining);

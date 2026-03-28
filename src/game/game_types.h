@@ -35,14 +35,27 @@ struct FVector3 {
     }
 };
 
-// BlackSpace item entry - 16-byte aligned (verified by shl rax, 4 in stat access pattern).
-// The item-gain AOB writes to [base + index + 0x10], confirming Count is at +0x10.
-// Fields at 0x00-0x0F are the item identifier / metadata.
+// BlackSpace item entry layout - confirmed by 3 independent sources:
+//   1. player-status-modifier: item-gain AOB "49 01 4C 38 10" writes [r8+rdi+0x10]
+//   2. Cheat Engine community: "item count is an 8 byte integer" at +0x10
+//   3. CE table v2: distinguishes stackable items (Count >= 2) from equipment
+//
+// Item-loss confirmed: aobscanmodule(INJECT,CrimsonDesert.exe,49 29 4C 07 10)
+// NOPing this instruction = items never decrease (selling, refining, crafting)
+//
+// Items use a dual-ID system: ItemNo (int32) + ItemKey (int32)
+//   Example: Abyss Artifact = ItemNo:65, ItemKey:75002
+//   Internal string codes: "item_currency_pywel_01" etc.
+//
+// Inventory config stored in 0008/0.paz, InventoryInfo table:
+//   _defaultSlotCount: uint16 (vanilla: 50)
+//   _maxSlotCount: uint16 (vanilla: 240, hard limit: 65535)
+// Private Storage expandable to 999 slots via PAZ patching (Nexus mod #244)
 struct BSItemEntry {
-    int32_t ItemId = 0;        // +0x00: Item type identifier
-    int32_t Flags = 0;         // +0x04: Bitfield (bound, tradeable, etc.)
-    int64_t Reserved = 0;      // +0x08: Padding / quality / durability
-    int64_t Count = 0;         // +0x10: Stack count (verified: item-gain writes here)
+    int32_t ItemNo = 0;        // +0x00: Item type number (e.g., 65 = Abyss Artifact)
+    int32_t ItemKey = 0;       // +0x04: Item key (e.g., 75002)
+    int64_t Reserved = 0;      // +0x08: Metadata / quality / durability
+    int64_t Count = 0;         // +0x10: Stack count (8-byte int, CONFIRMED by CE + ASI mod)
     int64_t MaxCount = 0;      // +0x18: Max stack size (mirrors stat entry layout)
 };
 // Note: actual entry size may be 32 bytes (0x20) per entry based on the
