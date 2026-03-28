@@ -3,6 +3,7 @@ build/
 out/
 cmake-build-*/
 *.dll
+*.asi
 *.lib
 *.exp
 *.pdb
@@ -23,4 +24,4 @@ Thumbs.db
 .DS_Store
 
 # Config (user overrides)
-config/StorageCraft.json
+config/StorageCraft.ini

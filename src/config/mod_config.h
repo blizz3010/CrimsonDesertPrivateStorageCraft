@@ -2,45 +2,48 @@
 
 #include <string>
 #include <mutex>
-#include <unordered_map>
 
 namespace StorageCraft {
 
 struct ModSettings {
-    bool        enabled           = true;
-    int         toggleKeyCode     = 0x78;    // VK_F9
-    float       maxStorageDistance = 1500.0f; // Unreal units (~15 meters)
+    // [General]
+    bool        enabled         = true;
+    bool        logEnabled      = true;
+    int         initDelayMs     = 3000;   // Wait for game to fully load
+
+    // [Keybinds]
+    int         toggleKeyCode   = 0x78;   // VK_F9
+
+    // [StorageCraft]
+    float       maxStorageDistance = 1500.0f;
     bool        showStorageIcon   = true;
-    std::string logLevel          = "Info";
+    bool        inventoryPriority = true;
+
+    // [Logging]
+    int         logLevel        = 1;      // 0=Debug, 1=Info, 2=Warn, 3=Error
 };
 
+// INI-based configuration matching Crimson Desert modding conventions.
+// Uses Windows GetPrivateProfileString/Int APIs (same as player-status-modifier).
 class ModConfig {
 public:
-    // Load config from JSON file next to the DLL.
-    // Creates default config if none exists.
     static void Load();
-
-    // Save current settings to disk.
     static void Save();
 
-    // Quick accessors
     static bool IsEnabled();
     static void Toggle();
     static const ModSettings& Get();
-
-    // Get the toggle key's virtual key code.
     static int GetToggleKeyCode();
 
 private:
-    static std::string GetConfigPath();
-    static int KeyNameToVK(const std::string& name);
-    static std::string VKToKeyName(int vk);
+    static std::wstring GetConfigPath();
+    static int ReadInt(const wchar_t* section, const wchar_t* key, int defaultVal);
+    static float ReadFloat(const wchar_t* section, const wchar_t* key, float defaultVal);
+    static std::wstring ReadString(const wchar_t* section, const wchar_t* key, const wchar_t* defaultVal);
 
     static ModSettings s_settings;
     static std::mutex s_mutex;
-
-    // Key name -> VK code mapping
-    static const std::unordered_map<std::string, int> s_keyMap;
+    static std::wstring s_configPath;
 };
 
 } // namespace StorageCraft

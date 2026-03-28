@@ -1,3 +1,18 @@
+// ============================================================================
+// StorageCraft - Crimson Desert Private Storage Crafting Mod
+//
+// ASI plugin loaded by an ASI loader (e.g., Ultimate ASI Loader).
+// Follows the same initialization pattern as other CD mods
+// (CrimsonDesert-player-status-modifier).
+//
+// Flow:
+//   1. ASI loader loads StorageCraft.asi into the game process
+//   2. DllMain spawns a background thread (avoids loader lock)
+//   3. Thread waits for game to initialize (configurable delay)
+//   4. Installs hooks via SafetyHook (mid-function hooks)
+//   5. Polls for toggle keybind (F9) and unload hotkey (Ctrl+Shift+U)
+// ============================================================================
+
 #include "core/logger.h"
 #include "core/hook_manager.h"
 #include "config/mod_config.h"
@@ -12,69 +27,76 @@
 namespace StorageCraft {
 
 static std::atomic<bool> s_running = false;
+static HMODULE s_hModule = nullptr;
 
 #ifdef _WIN32
-// Main mod thread - runs after DLL injection to avoid loader lock
-static DWORD WINAPI ModThread(LPVOID hModule) {
-    // Initialize logging first
+static DWORD WINAPI ModThread(LPVOID) {
+    // Initialize logging
     Logger::Init();
     Logger::Info("========================================");
-    Logger::Info("StorageCraft v1.0.0 - Private Storage Crafting Mod");
+    Logger::Info("StorageCraft v1.0.0");
+    Logger::Info("Private Storage Crafting Mod");
+    Logger::Info("Crimson Desert (BlackSpace Engine)");
     Logger::Info("========================================");
 
-    // Load configuration
+    // Load configuration from INI
     ModConfig::Load();
-    Logger::SetLevel(Logger::LevelFromString(ModConfig::Get().logLevel));
+    Logger::SetLevel(ModConfig::Get().logLevel);
 
-    // Initialize hooking engine
+    // Wait for game to fully initialize before hooking.
+    // This delay is critical - hooking too early will crash because
+    // the game's code sections aren't fully loaded yet.
+    // The player-status-modifier uses 3000ms as default.
+    int delay = ModConfig::Get().initDelayMs;
+    Logger::Info("Waiting {}ms for game initialization...", delay);
+    Sleep(delay);
+
+    // Initialize SafetyHook
     if (!HookManager::Init()) {
-        Logger::Error("Failed to initialize hook manager, aborting");
+        Logger::Error("Failed to initialize HookManager, aborting");
         Logger::Shutdown();
-        FreeLibraryAndExitThread(static_cast<HMODULE>(hModule), 1);
+        FreeLibraryAndExitThread(s_hModule, 1);
         return 1;
     }
 
-    // Install game hooks
+    // Install hooks
     CraftHook::Install();
     UIHook::Install();
 
-    Logger::Info("All hooks installed. Mod is {}.",
+    Logger::Info("All hooks installed. StorageCraft is {}.",
                  ModConfig::IsEnabled() ? "ENABLED" : "DISABLED");
-    Logger::Info("Press {} to toggle.", "F9"); // TODO: resolve from config
+    Logger::Info("Press F9 to toggle. Press Ctrl+Shift+U to unload.");
 
     s_running = true;
 
-    // Input polling loop for toggle keybind
+    // Input polling loop (~20 Hz, matching CD mod conventions)
     while (s_running) {
-        // Check for toggle key press
+        // Toggle key
         if (GetAsyncKeyState(ModConfig::GetToggleKeyCode()) & 1) {
             ModConfig::Toggle();
-            ModConfig::Save();
         }
 
-        // Check for unload key (Ctrl+Shift+U)
+        // Unload hotkey: Ctrl+Shift+U
         if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
             (GetAsyncKeyState(VK_SHIFT) & 0x8000) &&
             (GetAsyncKeyState('U') & 1)) {
-            Logger::Info("Unload hotkey pressed, shutting down...");
+            Logger::Info("Unload hotkey pressed");
             break;
         }
 
-        Sleep(50); // ~20 Hz polling
+        Sleep(50);
     }
 
-    // Cleanup
+    // Clean shutdown
     Logger::Info("Shutting down StorageCraft...");
-
     UIHook::Uninstall();
     CraftHook::Uninstall();
     StorageIndicator::Shutdown();
     HookManager::Shutdown();
-
     Logger::Info("Goodbye!");
     Logger::Shutdown();
 
-    FreeLibraryAndExitThread(static_cast<HMODULE>(hModule), 0);
+    FreeLibraryAndExitThread(s_hModule, 0);
     return 0;
 }
 #endif
@@ -86,8 +108,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*reserved*/) {
     switch (reason) {
         case DLL_PROCESS_ATTACH:
             DisableThreadLibraryCalls(hModule);
-            // Spawn a separate thread to avoid loader lock issues
-            if (auto hThread = CreateThread(nullptr, 0, StorageCraft::ModThread, hModule, 0, nullptr)) {
+            StorageCraft::s_hModule = hModule;
+            if (auto hThread = CreateThread(nullptr, 0, StorageCraft::ModThread, nullptr, 0, nullptr)) {
                 CloseHandle(hThread);
             }
             break;

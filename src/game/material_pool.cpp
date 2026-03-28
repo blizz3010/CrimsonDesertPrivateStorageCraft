@@ -1,5 +1,4 @@
 #include "game/material_pool.h"
-#include <algorithm>
 
 namespace StorageCraft {
 
@@ -29,26 +28,17 @@ std::optional<MaterialSource> MaterialPool::PlanConsumption(int32_t itemId, int3
     int32_t invCount = GetInventoryCount(itemId);
     int32_t storCount = GetStorageCount(itemId);
 
-    if (invCount + storCount < needed) {
-        return std::nullopt; // Not enough materials anywhere
-    }
+    if (invCount + storCount < needed) return std::nullopt;
 
     MaterialSource source;
-
-    // Priority: consume from inventory first
     source.fromInventory = std::min(invCount, needed);
-
-    // Remainder comes from storage
     source.fromStorage = needed - source.fromInventory;
-
     return source;
 }
 
 bool MaterialPool::RequiresStorage(int32_t itemId, int32_t needed) const {
     if (needed <= 0) return false;
-
-    int32_t invCount = GetInventoryCount(itemId);
-    return invCount < needed; // Need to pull from storage if inventory alone isn't enough
+    return GetInventoryCount(itemId) < needed;
 }
 
 } // namespace StorageCraft

@@ -1,17 +1,10 @@
 include(FetchContent)
 
-# MinHook - x64 function hooking library
+# SafetyHook - modern x86_64 hooking library (used by CD modding community)
+# Supports mid-function hooks, thread-safe, handles IP relocation via Zydis
 FetchContent_Declare(
-    minhook
-    GIT_REPOSITORY https://github.com/TsudaKageworthy/minhook.git
-    GIT_TAG        master
+    safetyhook
+    GIT_REPOSITORY https://github.com/cursey/safetyhook.git
+    GIT_TAG        main
 )
-FetchContent_MakeAvailable(minhook)
-
-# nlohmann/json - JSON parsing
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
-)
-FetchContent_MakeAvailable(nlohmann_json)
+FetchContent_MakeAvailable(safetyhook)

@@ -1,7 +1,10 @@
 #include "core/logger.h"
 #include <chrono>
-#include <iostream>
 #include <filesystem>
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace StorageCraft {
 
@@ -14,7 +17,6 @@ void Logger::Init(const std::string& filename) {
     std::lock_guard lock(s_mutex);
     if (s_initialized) return;
 
-    // Place log file next to the DLL
 #ifdef _WIN32
     HMODULE hModule = nullptr;
     GetModuleHandleExA(
@@ -31,7 +33,6 @@ void Logger::Init(const std::string& filename) {
 
     s_file.open(logPath, std::ios::out | std::ios::trunc);
     s_initialized = true;
-
     Log(LogLevel::Info, "StorageCraft logger initialized");
 }
 
@@ -48,15 +49,19 @@ void Logger::SetLevel(LogLevel level) {
     s_level = level;
 }
 
+void Logger::SetLevel(int level) {
+    SetLevel(static_cast<LogLevel>(std::clamp(level, 0, 3)));
+}
+
 void Logger::Log(LogLevel level, const std::string& message) {
     if (level < s_level) return;
 
-    const char* levelStr = "INFO";
+    const char* tag = "INFO";
     switch (level) {
-        case LogLevel::Debug: levelStr = "DEBUG"; break;
-        case LogLevel::Info:  levelStr = "INFO";  break;
-        case LogLevel::Warn:  levelStr = "WARN";  break;
-        case LogLevel::Error: levelStr = "ERROR"; break;
+        case LogLevel::Debug: tag = "DEBUG"; break;
+        case LogLevel::Info:  tag = "INFO";  break;
+        case LogLevel::Warn:  tag = "WARN";  break;
+        case LogLevel::Error: tag = "ERROR"; break;
     }
 
     auto now = std::chrono::system_clock::now();
@@ -67,27 +72,16 @@ void Logger::Log(LogLevel level, const std::string& message) {
     char timeBuf[32];
     std::strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", std::localtime(&time));
 
-    auto line = std::format("[{}.{:03d}] [{}] {}\n", timeBuf, ms.count(), levelStr, message);
+    auto line = std::format("[{}.{:03d}] [{}] {}\n", timeBuf, ms.count(), tag, message);
 
     if (s_initialized && s_file.is_open()) {
         s_file << line;
         s_file.flush();
     }
 
-#ifdef _DEBUG
-    std::cerr << line;
-#endif
-
 #ifdef _WIN32
     OutputDebugStringA(line.c_str());
 #endif
-}
-
-LogLevel Logger::LevelFromString(const std::string& str) {
-    if (str == "Debug") return LogLevel::Debug;
-    if (str == "Warn")  return LogLevel::Warn;
-    if (str == "Error") return LogLevel::Error;
-    return LogLevel::Info;
 }
 
 } // namespace StorageCraft

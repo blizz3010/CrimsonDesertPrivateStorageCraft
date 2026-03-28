@@ -5,24 +5,34 @@
 namespace StorageCraft {
 
 // ============================================================================
-// Offsets into UStorageContainer - update these per game patch
+// BlackSpace Engine offsets into BSStorageComponent
+//
+// Storage containers in Crimson Desert are world actors with an associated
+// component that holds the item array. The structure is similar to the
+// player inventory but at different offsets.
+//
+// TODO: These need verification via RE. Approach:
+//   1. Find the storage UI open function via AOB
+//   2. Trace the component pointer to find the item array offset
+//   3. Find the actor position via the owner actor chain
 // ============================================================================
 namespace Offsets {
-    constexpr ptrdiff_t Storage_ItemArray     = 0x168; // TArray<FItemStack>
-    constexpr ptrdiff_t Storage_OwnerActor    = 0x1A0; // AActor* (the container actor)
-    constexpr ptrdiff_t Actor_RootComponent   = 0x198; // USceneComponent*
-    constexpr ptrdiff_t SceneComp_WorldPos    = 0x140; // FVector
-    constexpr ptrdiff_t Storage_LockFlag      = 0x1C8; // uint8_t (0 = unlocked, 1 = locked)
+    constexpr ptrdiff_t Storage_ItemArray     = 0x168;
+    constexpr ptrdiff_t Storage_OwnerActor    = 0x1A0;
+    constexpr ptrdiff_t Storage_LockFlag      = 0x1C8; // uint8: 0=unlocked, 1=in-use
 
-    // Player location - accessed via the local player controller -> pawn -> position
-    // These are resolved at runtime via pattern scan; see GetPlayerPosition()
+    // BlackSpace actor position chain
+    constexpr ptrdiff_t Actor_Transform       = 0x198;
+    constexpr ptrdiff_t Transform_Position    = 0x10;  // FVector3 within transform
 }
 
-StorageAccessor::StorageAccessor(UStorageContainer* storage)
+StorageAccessor::StorageAccessor(BSStorageComponent* storage)
     : m_storage(storage) {}
 
 bool StorageAccessor::IsValid() const {
-    return m_storage != nullptr && GetItemArray() != nullptr;
+    if (!Memory::IsValidPtr(m_storage)) return false;
+    auto* items = GetItemArray();
+    return items != nullptr && Memory::IsValidPtr(items->Data);
 }
 
 int32_t StorageAccessor::GetItemCount(int32_t itemId) const {
@@ -41,22 +51,18 @@ int32_t StorageAccessor::GetItemCount(int32_t itemId) const {
 bool StorageAccessor::ConsumeItem(int32_t itemId, int32_t amount) {
     if (!IsValid() || amount <= 0) return false;
     if (!m_locked) {
-        Logger::Warn("Storage: attempted to consume without lock");
+        Logger::Warn("Storage: attempted consume without lock");
         return false;
     }
 
     auto* items = GetItemArray();
 
-    // Verify sufficient quantity
     int32_t available = 0;
     for (int32_t i = 0; i < items->Count; i++) {
-        if (items->Data[i].ItemId == itemId) {
-            available += items->Data[i].Count;
-        }
+        if (items->Data[i].ItemId == itemId) available += items->Data[i].Count;
     }
     if (available < amount) return false;
 
-    // Consume
     int32_t remaining = amount;
     for (int32_t i = 0; i < items->Count && remaining > 0; i++) {
         if (items->Data[i].ItemId != itemId) continue;
@@ -79,40 +85,35 @@ bool StorageAccessor::ConsumeItem(int32_t itemId, int32_t amount) {
 bool StorageAccessor::IsInRange(float maxDistance) const {
     if (!IsValid()) return false;
 
-    FVector storagePos = GetStoragePosition();
-    FVector playerPos = GetPlayerPosition();
+    FVector3 storagePos = GetStoragePosition();
+    FVector3 playerPos = GetPlayerPosition();
     float distance = playerPos.DistanceTo(storagePos);
 
-    Logger::Debug("Storage: distance to player = {:.1f} (max: {:.1f})", distance, maxDistance);
     return distance <= maxDistance;
 }
 
 bool StorageAccessor::TryLock() {
     if (!IsValid()) return false;
 
-    // Check the game's own lock flag to detect if another player is accessing it
+    // Check the game's in-use flag (set when another player opens the container)
     auto* lockFlag = reinterpret_cast<uint8_t*>(
         reinterpret_cast<uintptr_t>(m_storage) + Offsets::Storage_LockFlag
     );
-
-    // If the game-side flag is already set, another player is using it
     if (*lockFlag != 0) {
-        Logger::Warn("Storage: container is locked by another player");
+        Logger::Warn("Storage: container locked by another player");
         return false;
     }
 
     m_locked = true;
-    Logger::Debug("Storage: lock acquired");
     return true;
 }
 
 void StorageAccessor::Unlock() {
     m_locked = false;
-    Logger::Debug("Storage: lock released");
 }
 
-std::vector<FItemStack> StorageAccessor::GetItems() const {
-    std::vector<FItemStack> result;
+std::vector<BSItemEntry> StorageAccessor::GetItems() const {
+    std::vector<BSItemEntry> result;
     if (!IsValid()) return result;
 
     auto* items = GetItemArray();
@@ -123,26 +124,27 @@ std::vector<FItemStack> StorageAccessor::GetItems() const {
     return result;
 }
 
-TArray<FItemStack>* StorageAccessor::GetItemArray() const {
-    return reinterpret_cast<TArray<FItemStack>*>(
+BSArray<BSItemEntry>* StorageAccessor::GetItemArray() const {
+    return reinterpret_cast<BSArray<BSItemEntry>*>(
         reinterpret_cast<uintptr_t>(m_storage) + Offsets::Storage_ItemArray
     );
 }
 
-FVector StorageAccessor::GetStoragePosition() const {
+FVector3 StorageAccessor::GetStoragePosition() const {
     auto* ownerActor = Memory::ReadOffset<void*>(m_storage, Offsets::Storage_OwnerActor);
-    if (!ownerActor) return {};
+    if (!Memory::IsValidPtr(ownerActor)) return {};
 
-    auto* rootComponent = Memory::ReadOffset<void*>(ownerActor, Offsets::Actor_RootComponent);
-    if (!rootComponent) return {};
+    auto* transform = Memory::ReadOffset<void*>(ownerActor, Offsets::Actor_Transform);
+    if (!Memory::IsValidPtr(transform)) return {};
 
-    return Memory::ReadOffset<FVector>(rootComponent, Offsets::SceneComp_WorldPos);
+    return Memory::ReadOffset<FVector3>(transform, Offsets::Transform_Position);
 }
 
-FVector StorageAccessor::GetPlayerPosition() const {
-    // TODO: Resolve via GEngine->GameViewport->GetWorld()->GetFirstPlayerController()->GetPawn()
-    // For now, this uses a pattern-scanned cached pointer to the local player pawn.
-    // The actual implementation will be filled in during the RE phase.
+FVector3 StorageAccessor::GetPlayerPosition() const {
+    // TODO: Resolve via the player-pointer AOB chain:
+    //   player-pointer AOB -> rdx+0x68 -> component -> actor -> transform -> position
+    // This requires the player marker system to be initialized first.
+    // For now, returns origin (effectively disabling range checks until RE is done).
     return {};
 }
 
