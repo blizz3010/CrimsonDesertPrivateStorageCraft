@@ -141,11 +141,18 @@ FVector3 StorageAccessor::GetStoragePosition() const {
 }
 
 FVector3 StorageAccessor::GetPlayerPosition() const {
-    // TODO: Resolve via the player-pointer AOB chain:
-    //   player-pointer AOB -> rdx+0x68 -> component -> actor -> transform -> position
-    // This requires the player marker system to be initialized first.
-    // For now, returns origin (effectively disabling range checks until RE is done).
-    return {};
+    // Resolve player position via the captured player state.
+    // The player-pointer hook populates g_playerState.ownerPtr which is
+    // the owner actor. We walk: owner -> transform -> position using
+    // the same Actor_Transform and Transform_Position offsets.
+    auto ownerAddr = g_playerState.ownerPtr.load();
+    if (ownerAddr == 0 || !Memory::IsValidPtr(ownerAddr)) return {};
+
+    auto* owner = reinterpret_cast<void*>(ownerAddr);
+    auto* transform = Memory::ReadOffset<void*>(owner, Offsets::Actor_Transform);
+    if (!Memory::IsValidPtr(transform)) return {};
+
+    return Memory::ReadOffset<FVector3>(transform, Offsets::Transform_Position);
 }
 
 } // namespace StorageCraft

@@ -10,25 +10,18 @@ void StorageIndicator::Init() {
     if (s_initialized) return;
     ClearAll();
 
-    // TODO: Resolve BlackSpace UI widget pointers for the crafting panel.
-    // Potential approaches:
+    // Visual indicator approach:
     //
-    // 1. Widget property patching:
-    //    Find the crafting slot widgets via AOB, then modify their
-    //    icon/color properties to indicate storage sourcing.
-    //    (e.g., change slot border color or add an overlay icon index)
+    // We use the text modification approach - the UICountUpdate hook
+    // inflates the material count with storage totals, and this module
+    // tracks which slots received storage contributions. The UI hook
+    // can then append a marker to the count string if needed.
     //
-    // 2. DirectX overlay:
-    //    Hook the D3D11/D3D12 Present function and draw a small chest
-    //    icon at the screen coordinates of marked slots. This is more
-    //    invasive but doesn't depend on the BlackSpace widget layout.
-    //
-    // 3. Text modification:
-    //    Append a marker character (e.g., "*" or "[S]") to the material
-    //    count text string. Simplest approach but least visual.
-    //
-    // For now, we track state and log. The visual rendering will be
-    // implemented once the BlackSpace UI structure is better understood.
+    // For more advanced rendering (icon overlay, border color), a
+    // DirectX hook on Present() would be needed. That's a significant
+    // addition and optional - the combined count display is the primary
+    // user-facing feature. The slot tracking here enables future
+    // visual enhancements without changing the hook architecture.
 
     s_initialized = true;
     Logger::Info("StorageIndicator: initialized (tracking {} slots)", MAX_SLOTS);

@@ -132,6 +132,7 @@ src/
     game_types.h          # BlackSpace Engine structures (BSItemEntry, BSArray, etc.)
     inventory_accessor.*  # Player inventory read/write
     storage_accessor.*    # Storage container read/write with locking
+    storage_registry.*    # Runtime discovery and caching of storage pointers
     material_pool.*       # Unified inventory + storage material view
   craft/
     craft_hook.*          # Mid-function hooks on crafting consumption/check
@@ -175,10 +176,10 @@ test/
 - Data table base at component +0x58
 
 ### Still Needed (requires debugger + game running)
-1. **Storage container component pointer** — Open a storage container, set a data breakpoint on its item count, trace back to find the component pointer and walk chain
-2. **Storage item array offset** — Which offset within the storage component points to its item array (currently estimated at +0x168)
-3. **UI count display pattern** — The instruction that writes material counts to the crafting panel (for showing combined totals)
-4. **Player position resolution** — Walk from player component to world position for range checks
+1. **Storage container open AOB** — Open a storage container, set a data breakpoint on its item count, trace back to find the function that loads the storage component. Generate AOB from surrounding bytes. Update `Patterns::StorageOpen` in `craft_hook.cpp`.
+2. **Storage item array offset** — Which offset within the storage component points to its item array (currently estimated at +0x168). Verify `Offsets::Storage_ItemArray` in `storage_accessor.cpp`.
+3. **UI count display pattern** — The instruction that writes material counts to the crafting panel (for showing combined totals). Update `Patterns::UICountUpdate` in `ui_hook.cpp`.
+4. **UI slot state pattern** — The comparison instruction that determines green/red material sufficiency. Update `Patterns::UISlotState` in `ui_hook.cpp`.
 
 ### How to Find Missing Patterns
 

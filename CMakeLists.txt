@@ -27,6 +27,7 @@ add_library(StorageCraft SHARED
     src/core/logger.cpp
     src/game/inventory_accessor.cpp
     src/game/storage_accessor.cpp
+    src/game/storage_registry.cpp
     src/game/material_pool.cpp
     src/craft/craft_hook.cpp
     src/craft/material_consumer.cpp

@@ -1,6 +1,7 @@
 #include "ui/ui_hook.h"
 #include "ui/storage_indicator.h"
 #include "game/material_pool.h"
+#include "game/storage_registry.h"
 #include "game/game_types.h"
 #include "core/hook_manager.h"
 #include "core/memory.h"
@@ -58,18 +59,46 @@ static void OnUICountUpdate(SafetyHookContext& ctx) {
     if (!ModConfig::IsEnabled()) return;
 
     __try {
-        // eax typically holds the count being written to the UI text
+        // eax typically holds the count being written to the UI text.
+        // We inflate it with the storage count so the crafting panel
+        // shows the combined total.
         auto inventoryCount = static_cast<int32_t>(ctx.rax);
 
-        // TODO: Look up the item ID for this slot and add storage count
-        // For now, this is a passthrough until storage pointers are resolved
-        // int32_t storageCount = GetStorageCountForCurrentSlot();
-        // ctx.rax = inventoryCount + storageCount;
+        // The item ID for the current slot should be in another register.
+        // Common BlackSpace UI patterns pass item ID in edx or ecx.
+        // This needs verification from the actual discovered AOB.
+        auto itemId = static_cast<int32_t>(ctx.rdx);
+        if (itemId <= 0) return;
 
-        // When storage contributes, trigger the indicator
-        // if (storageCount > 0 && ModConfig::Get().showStorageIcon) {
-        //     StorageIndicator::MarkSlotAsStorageSourced(currentSlotIndex);
-        // }
+        // Query storage for additional count
+        if (!StorageRegistry::HasStorages()) return;
+
+        float maxDist = ModConfig::Get().maxStorageDistance;
+        auto storages = StorageRegistry::GetActiveStorages(maxDist);
+
+        int32_t storageCount = 0;
+        for (auto& storage : storages) {
+            storageCount += storage.GetItemCount(itemId);
+        }
+
+        if (storageCount > 0) {
+            // Replace the count register with combined total
+            ctx.rax = static_cast<uint64_t>(inventoryCount + storageCount);
+
+            // Track which slots use storage materials for the indicator
+            if (ModConfig::Get().showStorageIcon) {
+                // The slot index may be in r8 or another register depending
+                // on the actual AOB. Using r8d as a common candidate.
+                auto slotIndex = static_cast<int32_t>(ctx.r8);
+                if (slotIndex >= 0) {
+                    StorageIndicator::MarkSlotAsStorageSourced(slotIndex);
+                }
+            }
+
+            Logger::Debug("UICountUpdate: item {} - inv:{} + storage:{} = {}",
+                          itemId, inventoryCount, storageCount,
+                          inventoryCount + storageCount);
+        }
 
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         static bool reported = false;
@@ -92,11 +121,33 @@ static void OnUISlotState(SafetyHookContext& ctx) {
 
     __try {
         // cmp eax, ecx -> eax = available, ecx = required (or vice versa)
-        // We inflate the "available" register with storage counts
+        // We inflate the "available" register with storage counts so the
+        // slot shows green (sufficient) even when only storage fills the gap.
+        auto available = static_cast<int32_t>(ctx.rax);
+        auto required = static_cast<int32_t>(ctx.rcx);
 
-        // TODO: Add storage count to the available register
-        // auto available = static_cast<int32_t>(ctx.rax);
-        // ctx.rax = available + storageCount;
+        // If already sufficient, no need to check storage
+        if (available >= required) return;
+
+        if (!StorageRegistry::HasStorages()) return;
+
+        // We need the item ID for this slot. The UI comparison function
+        // typically has the item ID passed in a register or on the stack.
+        // Using rdx as a candidate - needs verification from actual AOB.
+        auto itemId = static_cast<int32_t>(ctx.rdx);
+        if (itemId <= 0) return;
+
+        float maxDist = ModConfig::Get().maxStorageDistance;
+        auto storages = StorageRegistry::GetActiveStorages(maxDist);
+
+        int32_t storageCount = 0;
+        for (auto& storage : storages) {
+            storageCount += storage.GetItemCount(itemId);
+        }
+
+        if (storageCount > 0) {
+            ctx.rax = static_cast<uint64_t>(available + storageCount);
+        }
 
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         static bool reported = false;

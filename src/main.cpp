@@ -22,6 +22,7 @@
 #include "ui/ui_hook.h"
 #include "ui/storage_indicator.h"
 #include "game/game_types.h"
+#include "game/storage_registry.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -34,6 +35,7 @@ static HMODULE s_hModule = nullptr;
 
 static void ResetRuntimeState() {
     g_playerState.Reset();
+    StorageRegistry::Clear();
     Logger::Debug("Runtime state reset");
 }
 
